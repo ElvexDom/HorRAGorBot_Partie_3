@@ -1,0 +1,25 @@
+# HorRAGor - PySpark Service
+FROM python:3.11-slim
+
+# Java (requis par PySpark)
+RUN apt-get update && apt-get install -y \
+    default-jdk-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# Java 21 est installé par default-jdk-headless sur Debian Trixie
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+WORKDIR /app
+
+# Dépendances Python
+RUN pip install --no-cache-dir \
+    pyspark==3.5.1 \
+    polars==0.20.31 \
+    pydantic==2.7.1 \
+    pydantic-settings==2.3.4
+
+# Copie du code
+COPY app/ ./app/
+
+CMD ["python", "app/services/spark_service.py"]

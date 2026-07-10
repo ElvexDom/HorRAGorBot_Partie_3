@@ -1,0 +1,17 @@
+services:
+
+  # -----------------------------------------------------------------------
+  # Service PySpark - analyses textuelles du Gold Layer
+  # -----------------------------------------------------------------------
+  spark:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    container_name: horragor-spark
+    volumes:
+      - ./data:/app/data # accès aux CSV input + écriture output
+      - ./app:/app/app # code source monté en live
+    environment:
+      - PYTHONUNBUFFERED=1
+      - SPARK_LOCAL_IP=127.0.0.1
+    command: python app/services/spark_service.py

@@ -1,0 +1,5 @@
+from .query_movie_metadata import query_movie_metadata, TOOL_DEFINITION as QUERY_METADATA_TOOL
+from .find_similar_horror_movies import find_similar_horror_movies, TOOL_DEFINITION as FIND_SIMILAR_TOOL
+from .calculate_movie_age import calculate_movie_age, TOOL_DEFINITION as MOVIE_AGE_TOOL
+from .scrape_detailed_synopsis import scrape_detailed_synopsis, TOOL_DEFINITION as SCRAPE_SYNOPSIS_TOOL
+from .horror_survival_simulator import get_survival_context, TOOL_DEFINITION as SURVIVAL_SIM_TOOL

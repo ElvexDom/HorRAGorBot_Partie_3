@@ -1,0 +1,31 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Variables d'environnement (secrets)
+.env
+.env.local
+.env.*.local
+
+# Données volumineuses (non versionnées — télécharger via README)
+data/input/*.tsv
+data/input/*.db
+data/input/*.csv
+data/input/kaggle_splits/
+
+# Logs et fichiers temporaires
+*.log
+enrich_rt_progress.log
+pdf_content.txt
+pdf_content_utf8.txt
+data/output/rt_debug.html
+
+# Paramètres locaux Claude Code (personnels, non partageables)
+.claude/
