@@ -4,6 +4,7 @@ Outil ludique qui simule les chances de survie de l'utilisateur
 dans le scénario d'un film d'horreur.
 Utilise le synopsis + les mots-clés horreur de la base pour nourrir le LLM.
 """
+import json
 import logging
 import os
 
@@ -92,7 +93,7 @@ def get_survival_context(movie_name: str) -> str:
                     f.overview,
                     ARRAY_AGG(DISTINCT g.name)
                         FILTER (WHERE g.name IS NOT NULL)   AS genres,
-                    s.horror_keywords,
+                    s.horror_keywords::text                 AS horror_keywords,
                     s.richness_score
                 FROM film f
                 LEFT JOIN film_genre fg   ON f.id = fg.film_id
@@ -101,7 +102,7 @@ def get_survival_context(movie_name: str) -> str:
                 WHERE f.title ILIKE %s OR f.original_title ILIKE %s
                 GROUP BY
                     f.id, f.title, f.original_title, f.release_date,
-                    f.overview, s.horror_keywords, s.richness_score
+                    f.overview, s.horror_keywords::text, s.richness_score
                 ORDER BY
                     CASE WHEN LOWER(f.title) = LOWER(%s) THEN 0 ELSE 1 END,
                     f.popularity DESC NULLS LAST
@@ -128,7 +129,13 @@ def get_survival_context(movie_name: str) -> str:
             if isinstance(kw, list):
                 keywords = ", ".join(kw[:15])
             elif isinstance(kw, str):
-                keywords = kw
+                # Casté en ::text côté SQL (le type json ne supporte pas
+                # l'égalité requise par GROUP BY) -> on reparse ici.
+                try:
+                    parsed = json.loads(kw)
+                    keywords = ", ".join(str(x) for x in parsed[:15]) if isinstance(parsed, list) else kw
+                except (json.JSONDecodeError, TypeError):
+                    keywords = kw
 
         context = (
             f"Film : {title} ({row['year'] or '?'})\n"

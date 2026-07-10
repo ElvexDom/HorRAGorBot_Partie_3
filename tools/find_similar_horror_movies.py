@@ -3,8 +3,8 @@ Tool 2 : find_similar_horror_movies
 Trouve les films d'horreur les plus proches sémantiquement d'un film donné,
 en utilisant l'index FAISS (similarité cosinus sur les vecteurs de synopsis).
 
-Le retriever (model, index, id_map) est injecté depuis llm_groq pour éviter
-de charger le modèle deux fois en mémoire.
+Le retriever (model, index, id_map) est injecté depuis tools.rag_tool pour
+éviter de charger le modèle deux fois en mémoire.
 """
 import logging
 import os
@@ -124,7 +124,7 @@ def find_similar_horror_movies(
 ) -> str:
     """
     Recherche les k films les plus similaires au film donné via FAISS.
-    model / index / id_map sont injectés depuis llm_groq (singleton partagé).
+    model / index / id_map sont injectés depuis tools.rag_tool (singleton partagé).
     """
     if model is None or index is None or id_map is None:
         return "Retriever FAISS non disponible."

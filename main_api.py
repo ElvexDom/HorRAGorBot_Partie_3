@@ -1,19 +1,24 @@
 """
 API FastAPI pour HorRAGor BOT
-Composant Back-End : réception des messages Streamlit et traitement via l'agent LLM
-
-Intégration avec Groq API
+Composant Back-End : réception des messages Streamlit et traitement via le
+graphe multi-agent LangGraph (Agent RAG -> Router -> Agent Scraper -> Agent
+de Narration), avec monitoring Langfuse et évaluation qualité par Le Juge.
 """
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from llm_groq import GroqLLM, get_groq_client, initialize_retriever
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field
+
+from graph.judge import judge_and_retry
+from graph.pipeline import app as agent_graph
+from tools.rag_tool import initialize_retriever
 
 # ============================================================================
 # CONFIGURATION
@@ -29,29 +34,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# CLIENT GROQ (SINGLETON)
+# LANGFUSE (MONITORING, OPTIONNEL EN LOCAL)
 # ============================================================================
 
-groq_client: Optional[GroqLLM] = None
 
-
-def get_groq() -> GroqLLM:
-    """
-    Retourne une instance singleton du client Groq.
-    """
-
-    global groq_client
-
-    if groq_client is None:
-        try:
-            groq_client = get_groq_client()
-            logger.info("Client Groq initialisé avec succès")
-
-        except ValueError as e:
-            logger.error(f"Impossible d'initialiser Groq : {e}")
-            raise
-
-    return groq_client
+def _get_langfuse_callbacks() -> list:
+    """Retourne le callback Langfuse si les clés sont configurées, sinon une
+    liste vide — le graphe tourne sans monitoring plutôt que de planter."""
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+        return []
+    try:
+        from langfuse.langchain import CallbackHandler
+        return [CallbackHandler()]
+    except Exception as e:
+        logger.warning(f"Langfuse indisponible, monitoring désactivé : {e}")
+        return []
 
 
 # ============================================================================
@@ -67,8 +64,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="HorRAGor BOT API",
-    description="Agent conversationnel spécialisé dans l'univers de l'horreur",
-    version="1.0.0",
+    description="Agent conversationnel multi-agent spécialisé dans l'univers de l'horreur",
+    version="3.0.0",
     lifespan=lifespan
 )
 
@@ -199,7 +196,7 @@ async def root():
 
     return {
         "name": "HorRAGor BOT API",
-        "version": "1.0.0",
+        "version": "3.0.0",
         "status": "running"
     }
 
@@ -237,7 +234,8 @@ async def health_check():
 )
 async def chat(request: ChatRequest) -> ChatResponse:
     """
-    Reçoit une question et génère une réponse via Groq.
+    Reçoit une question et la fait traverser le graphe multi-agent
+    (Agent RAG -> Router -> Agent Scraper -> Agent de Narration).
     """
 
     try:
@@ -245,26 +243,41 @@ async def chat(request: ChatRequest) -> ChatResponse:
             f"Question reçue : {request.question[:100]}"
         )
 
-        try:
-            groq = get_groq()
+        history_messages = [
+            AIMessage(content=m["content"]) if m.get("role") == "assistant"
+            else HumanMessage(content=m["content"])
+            for m in request.history
+        ]
 
-        except ValueError:
+        initial_state = {
+            "messages": [*history_messages, HumanMessage(content=request.question)],
+            "user_question": request.question,
+            "tools_used": [],
+        }
+
+        try:
+            result = await agent_graph.ainvoke(
+                initial_state,
+                config={"callbacks": _get_langfuse_callbacks()}
+            )
+        except ValueError as e:
             raise HTTPException(
                 status_code=500,
                 detail=(
                     "Configuration Groq manquante. "
-                    "Vérifiez la variable GROQ_API_KEY."
+                    f"Vérifiez la variable GROQ_API_KEY. ({e})"
                 )
             )
 
-        result = await groq.generate_response(
-            user_question=request.question,
-            conversation_history=request.history
+        answer     = result["messages"][-1].content
+        tools_used = result.get("tools_used", [])
+
+        answer, judge_result = await asyncio.to_thread(
+            judge_and_retry, request.question, answer, tools_used
         )
 
         logger.info(
-            f"Réponse générée ({len(result.answer)} caractères) "
-            f"— outils : {result.tools_used}"
+            f"Réponse générée ({len(answer)} caractères) — outils : {tools_used}"
         )
 
         conversation_id = (
@@ -272,17 +285,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
             or f"conv_{request.user_id or 'anonymous'}"
         )
 
-        verdict = None
-        if result.judge_verdict:
-            verdict = JudgeVerdict(
-                is_valid=result.judge_verdict.get("is_valid", True),
-                confidence=result.judge_verdict.get("confidence", 0.75),
-                reasoning=result.judge_verdict.get("reasoning", "")
-            )
+        verdict = JudgeVerdict(
+            is_valid=judge_result.get("is_valid", True),
+            confidence=judge_result.get("confidence", 0.75),
+            reasoning=judge_result.get("reasoning", "")
+        )
 
         return ChatResponse(
-            answer=result.answer,
-            tools_used=result.tools_used,
+            answer=answer,
+            tools_used=tools_used,
             judge_verdict=verdict,
             conversation_id=conversation_id
         )
@@ -309,30 +320,32 @@ async def get_info():
     Informations sur le service.
     """
 
-    groq_status = "connected"
-
-    try:
-        get_groq()
-
-    except ValueError:
-        groq_status = "not_configured"
+    groq_status = "connected" if os.getenv("GROQ_API_KEY") else "not_configured"
+    langfuse_status = "enabled" if _get_langfuse_callbacks() else "disabled"
 
     return {
         "agent": "HorRAGor BOT",
-        "version": "1.0.0",
+        "version": "3.0.0",
+        "architecture": "multi-agent (LangGraph) : rag -> router -> [scraper] -> narration",
         "llm": {
             "provider": "Groq",
             "model": "llama-3.3-70b-versatile",
             "status": groq_status
         },
-        "available_tools": [
-            "groq-llm",
-            "query_movie_metadata",
-            "find_similar_horror_movies",
-            "scrape_detailed_synopsis",
-            "calculate_movie_age",
-            "horror_survival_simulator"
-        ],
+        "monitoring": {
+            "langfuse": langfuse_status
+        },
+        "agents": {
+            "rag_node": [
+                "search_horror_movies",
+                "query_movie_metadata",
+                "similar_movies",
+                "movie_age",
+                "survival_sim"
+            ],
+            "scraper_node": ["detailed_synopsis"],
+            "narration_node": []
+        },
         "models": {
             "request": "ChatRequest",
             "response": "ChatResponse",
