@@ -1,10 +1,13 @@
+import os
 import re
 
 import streamlit as st
 import streamlit.components.v1 as components
 import httpx
 
-API_URL = "http://localhost:8000/chat"
+# En local, l'API Intelligence tourne sur localhost. En Docker, ce nom ne
+# résout pas le conteneur "api" — docker-compose surcharge API_URL.
+API_URL = os.environ.get("API_URL", "http://localhost:8000/chat")
 
 
 def _sanitize_markdown(text: str) -> str:

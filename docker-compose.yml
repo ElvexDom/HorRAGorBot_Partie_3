@@ -1,6 +1,71 @@
 services:
 
   # -----------------------------------------------------------------------
+  # Couche Données (HorRAGor 1) - encapsule l'accès DB, aucun port publié,
+  # accessible uniquement depuis "api" via backend-net.
+  # -----------------------------------------------------------------------
+  data-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.data-api
+    container_name: horragor-data-api
+    env_file:
+      - .env
+    networks:
+      - backend-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx,sys; sys.exit(0 if httpx.get('http://localhost:8100/health').status_code==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # Couche Intelligence (Partie 2 & 3) - graphe multi-agent LangGraph.
+  # Seul service autorisé à parler à data-api (réseau privé backend-net).
+  # -----------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: horragor-api
+    env_file:
+      - .env
+    environment:
+      - DATA_API_URL=http://data-api:8100
+    ports:
+      - "8000:8000"
+    networks:
+      - backend-net
+      - public-net
+    depends_on:
+      data-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx,sys; sys.exit(0 if httpx.get('http://localhost:8000/health').status_code==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------------------------
+  # Couche Présentation - interface Streamlit. N'accède jamais à data-api
+  # directement (pas sur backend-net) : passe systématiquement par "api".
+  # -----------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: horragor-frontend
+    environment:
+      - API_URL=http://api:8000/chat
+    ports:
+      - "8501:8501"
+    networks:
+      - public-net
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # -----------------------------------------------------------------------
   # Service PySpark - analyses textuelles du Gold Layer
   # -----------------------------------------------------------------------
   spark:
@@ -15,3 +80,14 @@ services:
       - PYTHONUNBUFFERED=1
       - SPARK_LOCAL_IP=127.0.0.1
     command: python app/services/spark_service.py
+
+networks:
+  # Réseau privé : data-api n'y est jamais jointe à un port publié, et
+  # frontend n'y est jamais attachée -> inaccessible depuis l'extérieur du
+  # cluster ET depuis la Couche Présentation.
+  backend-net:
+    driver: bridge
+  # Réseau public interne à Compose : relie frontend <-> api. Les ports
+  # publiés (8000, 8501) sont ce qui les rend joignables depuis l'hôte.
+  public-net:
+    driver: bridge

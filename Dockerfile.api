@@ -1,0 +1,26 @@
+# HorRAGor - Couche Intelligence (graphe multi-agent LangGraph)
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# build-essential + libpq-dev : requis pour compiler psycopg2 (sdist, pas de wheel
+# précompilé) depuis les sources — dépendance transitive du lockfile partagé
+# même si ce service ne l'utilise pas directement.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+COPY graph/ ./graph/
+COPY tools/ ./tools/
+COPY main_api.py ./
+# Index FAISS pré-construit, chargé par tools/rag_tool.py au démarrage.
+COPY data/faiss.index data/id_map.npy ./data/
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "main_api:app", "--host", "0.0.0.0", "--port", "8000"]

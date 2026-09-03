@@ -1,0 +1,22 @@
+# HorRAGor - Couche Présentation (Streamlit)
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# build-essential + libpq-dev : requis pour compiler psycopg2 (sdist, pas de wheel
+# précompilé) depuis les sources — dépendance transitive du lockfile partagé
+# même si ce service ne l'utilise pas directement.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+COPY frontend/ ./frontend/
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+EXPOSE 8501
+CMD ["streamlit", "run", "frontend/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]

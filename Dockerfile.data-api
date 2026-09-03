@@ -1,0 +1,27 @@
+# HorRAGor - Couche Données (data_api)
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# build-essential + libpq-dev : requis pour compiler psycopg2 (sdist, pas de wheel
+# précompilé) depuis les sources.
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir uv
+
+# Manifeste d'abord (cache Docker) : les dépendances ne se réinstallent que
+# si pyproject.toml/uv.lock changent, pas à chaque modification de code.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+# Seuls app/config et app/models sont nécessaires à data_api/db.py
+# (le reste de app/ est le pipeline d'ingestion offline, hors runtime).
+COPY app/config/ ./app/config/
+COPY app/models/ ./app/models/
+COPY data_api/ ./data_api/
+
+ENV PATH="/app/.venv/bin:$PATH"
+
+EXPOSE 8100
+CMD ["python", "-m", "uvicorn", "data_api.main:app", "--host", "0.0.0.0", "--port", "8100"]

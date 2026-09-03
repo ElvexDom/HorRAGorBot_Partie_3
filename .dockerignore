@@ -1,0 +1,25 @@
+# Environnements / VCS
+.venv/
+.git/
+.claude/
+
+# Python
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Données volumineuses non nécessaires aux images runtime
+data/input/
+data/output/
+data/logs/
+
+# Documentation / présentations (non utilisées à l'exécution)
+*.pdf
+*.pptx
+
+# Secrets (jamais dans l'image — passés via env_file/environment)
+.env
+.env.local
