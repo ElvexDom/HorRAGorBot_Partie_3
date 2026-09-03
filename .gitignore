@@ -29,3 +29,8 @@ data/output/rt_debug.html
 
 # Paramètres locaux Claude Code (personnels, non partageables)
 .claude/
+
+# Tests / couverture
+.coverage
+htmlcov/
+.pytest_cache/

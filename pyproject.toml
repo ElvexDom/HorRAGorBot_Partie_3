@@ -24,3 +24,22 @@ dependencies = [
     "langfuse>=4.13.2",
     "beautifulsoup4>=4.14.3",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["tests/manual", ".venv"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["graph", "tools", "main_api"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
