@@ -2,15 +2,14 @@
 Tool 2 : find_similar_horror_movies
 Trouve les films d'horreur les plus proches sémantiquement d'un film donné,
 en utilisant l'index FAISS (similarité cosinus sur les vecteurs de synopsis).
+Les métadonnées des films sont récupérées via la Couche Données (data_api/).
 
 Le retriever (model, index, id_map) est injecté depuis tools.rag_tool pour
 éviter de charger le modèle deux fois en mémoire.
 """
 import logging
-import os
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from tools import data_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -42,77 +41,12 @@ TOOL_DEFINITION = {
 }
 
 
-def _get_conn():
-    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise ValueError("SUPABASE_DB_URL ou DATABASE_URL non configurée.")
-    return psycopg2.connect(db_url)
-
-
 def _get_film_overview(movie_name: str) -> tuple:
     """Retourne (film_id, overview, title) pour le film demandé."""
-    try:
-        conn = _get_conn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT id, title, overview FROM film
-                WHERE title ILIKE %s OR original_title ILIKE %s
-                ORDER BY
-                    CASE WHEN LOWER(title)          = LOWER(%s) THEN 0
-                         WHEN LOWER(original_title) = LOWER(%s) THEN 1
-                         ELSE 2
-                    END,
-                    popularity DESC NULLS LAST
-                LIMIT 1
-                """,
-                (f"%{movie_name}%", f"%{movie_name}%", movie_name, movie_name)
-            )
-            row = cur.fetchone()
-        conn.close()
-        if not row:
-            return None, "", movie_name
-        return row["id"], row["overview"] or "", row["title"]
-    except Exception as e:
-        logger.error(f"Erreur _get_film_overview({movie_name!r}) : {e}")
+    film = data_api_client.search_film(movie_name)
+    if not film:
         return None, "", movie_name
-
-
-def _fetch_similar_films(film_ids: list) -> list:
-    """Récupère les métadonnées des films similaires depuis Supabase."""
-    if not film_ids:
-        return []
-    try:
-        conn = _get_conn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    f.id,
-                    f.title,
-                    f.original_title,
-                    EXTRACT(YEAR FROM f.release_date)::int          AS year,
-                    ARRAY_AGG(DISTINCT g.name)
-                        FILTER (WHERE g.name IS NOT NULL)           AS genres,
-                    MAX(CASE WHEN e.source_name = 'TMDB'
-                        THEN e.score_value END)                     AS tmdb_score
-                FROM film f
-                LEFT JOIN film_genre fg ON f.id = fg.film_id
-                LEFT JOIN genre g       ON fg.genre_id = g.id
-                LEFT JOIN evaluation e  ON f.id = e.film_id
-                WHERE f.id = ANY(%s)
-                GROUP BY f.id, f.title, f.original_title, f.release_date
-                """,
-                (film_ids,)
-            )
-            rows = cur.fetchall()
-        conn.close()
-        # Préserve l'ordre FAISS (par similarité décroissante)
-        rows_by_id = {r["id"]: dict(r) for r in rows}
-        return [rows_by_id[fid] for fid in film_ids if fid in rows_by_id]
-    except Exception as e:
-        logger.error(f"Erreur _fetch_similar_films : {e}")
-        return []
+    return film["id"], film.get("overview") or "", film["title"]
 
 
 def find_similar_horror_movies(
@@ -150,7 +84,11 @@ def find_similar_horror_movies(
     # Exclure le film source
     film_ids = [fid for fid in film_ids if fid != source_id][:k]
 
-    films = _fetch_similar_films(film_ids)
+    try:
+        films = data_api_client.get_films_by_ids(film_ids)
+    except RuntimeError as e:
+        logger.error(f"Erreur find_similar_horror_movies : {e}")
+        films = []
 
     if not films:
         return f"Aucun film similaire trouvé pour « {found_title} »."
@@ -158,9 +96,9 @@ def find_similar_horror_movies(
     lines = [f"Films similaires à « {found_title} » :\n"]
     for i, f in enumerate(films, 1):
         genres = ", ".join(f["genres"]) if f["genres"] else "N/A"
-        score  = f"{f['tmdb_score']:.1f}/10" if f["tmdb_score"] else "N/A"
-        lines.append(
-            f"{i}. {f['title']} ({f['year'] or '?'}) — {genres} — TMDB {score}"
-        )
+        tmdb_score = (f.get("evaluations") or {}).get("tmdb")
+        score = f"{tmdb_score:.1f}/10" if tmdb_score else "N/A"
+        year = f["release_date"][:4] if f.get("release_date") else "?"
+        lines.append(f"{i}. {f['title']} ({year}) — {genres} — TMDB {score}")
 
     return "\n".join(lines)

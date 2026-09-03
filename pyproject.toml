@@ -23,6 +23,7 @@ dependencies = [
     "langgraph>=1.2.8",
     "langfuse>=4.13.2",
     "beautifulsoup4>=4.14.3",
+    "sqlalchemy>=2.0.50",
 ]
 
 [dependency-groups]
@@ -38,7 +39,7 @@ norecursedirs = ["tests/manual", ".venv"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["graph", "tools", "main_api"]
+source = ["graph", "tools", "data_api", "main_api"]
 
 [tool.coverage.report]
 fail_under = 80

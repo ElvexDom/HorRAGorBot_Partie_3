@@ -2,14 +2,11 @@
 Tool 5 : horror_survival_simulator
 Outil ludique qui simule les chances de survie de l'utilisateur
 dans le scénario d'un film d'horreur.
-Utilise le synopsis + les mots-clés horreur de la base pour nourrir le LLM.
+Utilise le synopsis + les mots-clés horreur (Couche Données) pour nourrir le LLM.
 """
-import json
 import logging
-import os
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from tools import data_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -69,78 +66,29 @@ Sois créatif, précis sur les éléments du film, et garde un ton entre humour 
 """
 
 
-def _get_conn():
-    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise ValueError("SUPABASE_DB_URL ou DATABASE_URL non configurée.")
-    return psycopg2.connect(db_url)
-
-
 def get_survival_context(movie_name: str) -> str:
     """
     Récupère le synopsis, les mots-clés horreur et les métadonnées du film
-    pour alimenter la simulation de survie.
+    (via la Couche Données) pour alimenter la simulation de survie.
     """
     try:
-        conn = _get_conn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    f.title,
-                    f.original_title,
-                    EXTRACT(YEAR FROM f.release_date)::int  AS year,
-                    f.overview,
-                    ARRAY_AGG(DISTINCT g.name)
-                        FILTER (WHERE g.name IS NOT NULL)   AS genres,
-                    s.horror_keywords::text                 AS horror_keywords,
-                    s.richness_score
-                FROM film f
-                LEFT JOIN film_genre fg   ON f.id = fg.film_id
-                LEFT JOIN genre g         ON fg.genre_id = g.id
-                LEFT JOIN analyse_spark s ON f.id = s.film_id
-                WHERE f.title ILIKE %s OR f.original_title ILIKE %s
-                GROUP BY
-                    f.id, f.title, f.original_title, f.release_date,
-                    f.overview, s.horror_keywords::text, s.richness_score
-                ORDER BY
-                    CASE WHEN LOWER(f.title) = LOWER(%s) THEN 0 ELSE 1 END,
-                    f.popularity DESC NULLS LAST
-                LIMIT 1
-                """,
-                (f"%{movie_name}%", f"%{movie_name}%", movie_name)
-            )
-            row = cur.fetchone()
-        conn.close()
+        film = data_api_client.search_film(movie_name)
 
-        if not row:
+        if not film:
             return f"Film « {movie_name} » introuvable en base."
 
-        row = dict(row)
-        title = row["title"]
-        if row["original_title"] and row["original_title"] != row["title"]:
-            title += f" ({row['original_title']})"
+        title = film["title"]
+        if film.get("original_title") and film["original_title"] != film["title"]:
+            title += f" ({film['original_title']})"
 
-        genres = ", ".join(row["genres"]) if row["genres"] else "Horreur"
-
-        keywords = ""
-        if row["horror_keywords"]:
-            kw = row["horror_keywords"]
-            if isinstance(kw, list):
-                keywords = ", ".join(kw[:15])
-            elif isinstance(kw, str):
-                # Casté en ::text côté SQL (le type json ne supporte pas
-                # l'égalité requise par GROUP BY) -> on reparse ici.
-                try:
-                    parsed = json.loads(kw)
-                    keywords = ", ".join(str(x) for x in parsed[:15]) if isinstance(parsed, list) else kw
-                except (json.JSONDecodeError, TypeError):
-                    keywords = kw
+        genres = ", ".join(film["genres"]) if film["genres"] else "Horreur"
+        keywords = ", ".join(film["horror_keywords"][:15]) if film.get("horror_keywords") else ""
+        year = film["release_date"][:4] if film.get("release_date") else None
 
         context = (
-            f"Film : {title} ({row['year'] or '?'})\n"
+            f"Film : {title} ({year or '?'})\n"
             f"Genres : {genres}\n"
-            f"Synopsis : {row['overview'] or 'Non disponible'}\n"
+            f"Synopsis : {film.get('overview') or 'Non disponible'}\n"
         )
         if keywords:
             context += f"Éléments d'horreur clés : {keywords}\n"

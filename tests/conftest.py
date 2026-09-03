@@ -1,11 +1,8 @@
 """
 Fixtures partagées — isolent tous les tests des services externes réels
-(Groq, PostgreSQL, FAISS, Wikipedia). Aucun test de ce projet ne doit
-déclencher un appel réseau ou consommer un vrai budget d'API.
+(Groq, Couche Données / data_api, FAISS, Wikipedia). Aucun test de ce projet
+ne doit déclencher un appel réseau ou consommer un vrai budget d'API.
 """
-from contextlib import contextmanager
-from unittest.mock import MagicMock
-
 import pytest
 from langchain_core.messages import AIMessage
 
@@ -42,56 +39,41 @@ def fake_llm_factory():
     return FakeLLM
 
 
-class FakeCursor:
-    """Double d'un curseur psycopg2 (RealDictCursor). `rows` est la liste
-    de dicts renvoyée par le prochain fetchone()/fetchall()."""
+class FakeDataApi:
+    """Double de tools/data_api_client.py — configure les réponses de
+    `search_film` (un film ou None) et `get_films_by_ids` (une liste, ou
+    lève RuntimeError si `.unreachable()` a été appelé, pour simuler une
+    Couche Données injoignable)."""
 
-    def __init__(self, rows: list[dict] | None = None):
-        self._rows = rows or []
+    def __init__(self):
+        self.film: dict | None = None
+        self.films: list[dict] = []
+        self._raise = False
 
-    def execute(self, *args, **kwargs):
-        pass
+    def set_film(self, film: dict | None):
+        self.film = film
 
-    def fetchone(self):
-        return self._rows[0] if self._rows else None
+    def set_films(self, films: list[dict]):
+        self.films = films
 
-    def fetchall(self):
-        return self._rows
+    def unreachable(self):
+        self._raise = True
 
-    def __enter__(self):
-        return self
+    def search_film(self, title: str) -> dict | None:
+        return self.film
 
-    def __exit__(self, *exc):
-        return False
-
-
-class FakeConnection:
-    def __init__(self, rows: list[dict] | None = None):
-        self._rows = rows or []
-
-    def cursor(self, cursor_factory=None):
-        return FakeCursor(self._rows)
-
-    def close(self):
-        pass
+    def get_films_by_ids(self, ids: list[int]) -> list[dict]:
+        if self._raise:
+            raise RuntimeError("Data API inaccessible (base en pause ?)")
+        return self.films
 
 
 @pytest.fixture
-def fake_db(monkeypatch):
-    """Monkeypatch `psycopg2.connect` pour tous les modules qui l'importent
-    directement (`import psycopg2` puis `psycopg2.connect(...)`). Fixe aussi
-    DATABASE_URL pour passer le garde-fou `_get_conn()` de chaque tool, quel
-    que soit le contenu réel du `.env` local. Retourne une fonction
-    `set_rows(rows)` pour configurer la réponse du prochain appel DB."""
-    state = {"rows": []}
-
-    def fake_connect(*args, **kwargs):
-        return FakeConnection(state["rows"])
-
-    monkeypatch.setattr("psycopg2.connect", fake_connect)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
-
-    def set_rows(rows: list[dict]):
-        state["rows"] = rows
-
-    return set_rows
+def fake_data_api(monkeypatch):
+    """Monkeypatch tools.data_api_client.search_film / get_films_by_ids —
+    tous les tools y accèdent via `from tools import data_api_client` (accès
+    qualifié), donc ce monkeypatch global les affecte tous."""
+    fake = FakeDataApi()
+    monkeypatch.setattr("tools.data_api_client.search_film", fake.search_film)
+    monkeypatch.setattr("tools.data_api_client.get_films_by_ids", fake.get_films_by_ids)
+    return fake

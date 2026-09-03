@@ -1020,6 +1020,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyspark" },
     { name = "sentence-transformers" },
+    { name = "sqlalchemy" },
     { name = "streamlit" },
 ]
 
@@ -1049,6 +1050,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.14.1" },
     { name = "pyspark", specifier = ">=4.1.1" },
     { name = "sentence-transformers", specifier = ">=5.5.1" },
+    { name = "sqlalchemy", specifier = ">=2.0.50" },
     { name = "streamlit", specifier = ">=1.58.0" },
 ]
 

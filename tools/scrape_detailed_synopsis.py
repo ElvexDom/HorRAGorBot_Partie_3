@@ -5,13 +5,11 @@ Activé uniquement si l'utilisateur demande des détails approfondis
 non présents dans la base (anecdotes, contexte de production, etc.).
 """
 import logging
-import os
 import re
 
-import psycopg2
 import requests
-from bs4 import BeautifulSoup
-from psycopg2.extras import RealDictCursor
+
+from tools import data_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,37 +45,15 @@ _WIKI_PARSE_URL  = "https://fr.wikipedia.org/w/api.php"
 _MAX_CHARS = 2000
 
 
-def _get_conn():
-    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise ValueError("SUPABASE_DB_URL ou DATABASE_URL non configurée.")
-    return psycopg2.connect(db_url)
-
-
 def _get_film_title(movie_name: str) -> str:
-    """Récupère le titre exact depuis la base pour améliorer la recherche Wikipedia."""
+    """Récupère le titre exact via la Couche Données pour améliorer la
+    recherche Wikipedia (préfère le titre original, souvent en anglais)."""
     try:
-        conn = _get_conn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT title, original_title FROM film
-                WHERE title ILIKE %s OR original_title ILIKE %s
-                ORDER BY
-                    CASE WHEN LOWER(title) = LOWER(%s) THEN 0
-                         ELSE 1 END,
-                    popularity DESC NULLS LAST
-                LIMIT 1
-                """,
-                (f"%{movie_name}%", f"%{movie_name}%", movie_name)
-            )
-            row = cur.fetchone()
-        conn.close()
-        if row:
-            # Préfère le titre original pour Wikipedia (souvent en anglais)
-            return row["original_title"] or row["title"]
+        film = data_api_client.search_film(movie_name)
+        if film:
+            return film.get("original_title") or film["title"]
     except Exception as e:
-        logger.warning(f"DB inaccessible pour titre : {e}")
+        logger.warning(f"Data API inaccessible pour titre : {e}")
     return movie_name
 
 

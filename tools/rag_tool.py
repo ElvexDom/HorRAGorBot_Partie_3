@@ -8,18 +8,16 @@ Le savoir Wikipedia (detailed_synopsis) n'est PAS ici : c'est l'outil
 exclusif de l'Agent Scraper (tools/scraper_tool.py).
 """
 import logging
-import os
 from pathlib import Path
 from typing import Optional
 
 import faiss
 import numpy as np
-import psycopg2
-from psycopg2.extras import RealDictCursor
 from sentence_transformers import SentenceTransformer
 
 from tools.calculate_movie_age import TOOL_DEFINITION as MOVIE_AGE_TOOL
 from tools.calculate_movie_age import calculate_movie_age
+from tools import data_api_client
 from tools.find_similar_horror_movies import TOOL_DEFINITION as FIND_SIMILAR_TOOL
 from tools.find_similar_horror_movies import find_similar_horror_movies
 from tools.horror_survival_simulator import TOOL_DEFINITION as SURVIVAL_SIM_TOOL
@@ -65,49 +63,6 @@ def initialize_retriever() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Supabase
-# ---------------------------------------------------------------------------
-
-def _fetch_films_from_db(film_ids: list[int]) -> list[dict]:
-    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
-    if not db_url:
-        logger.warning("SUPABASE_DB_URL et DATABASE_URL absentes du .env")
-        return []
-    try:
-        conn = psycopg2.connect(db_url)
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    f.id,
-                    f.title,
-                    f.overview,
-                    f.release_date,
-                    ARRAY_AGG(DISTINCT g.name)
-                        FILTER (WHERE g.name IS NOT NULL)            AS genres,
-                    MAX(CASE WHEN e.source_name = 'TMDB'
-                        THEN e.score_value END)                      AS vote_average
-                FROM film f
-                LEFT JOIN film_genre fg ON f.id = fg.film_id
-                LEFT JOIN genre g       ON fg.genre_id = g.id
-                LEFT JOIN evaluation e  ON f.id = e.film_id
-                WHERE f.id = ANY(%s)
-                GROUP BY f.id, f.title, f.overview, f.release_date
-                """,
-                (film_ids,)
-            )
-            rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except psycopg2.OperationalError as e:
-        logger.error(f"Supabase inaccessible (connexion / base en pause ?) : {e}")
-        raise RuntimeError("Supabase inaccessible (base en pause ?)") from e
-    except Exception as e:
-        logger.error(f"Erreur requête Supabase : {e}")
-        raise
-
-
-# ---------------------------------------------------------------------------
 # Tool : search_horror_movies (recherche sémantique libre)
 # ---------------------------------------------------------------------------
 
@@ -141,14 +96,14 @@ SEARCH_HORROR_MOVIES_TOOL = {
 
 
 def search_horror_movies(query: str, k: int = 5) -> str:
-    """Exécute la recherche FAISS + Supabase et retourne le contexte textuel."""
+    """Exécute la recherche FAISS + Couche Données et retourne le contexte textuel."""
     model, index, id_map = _get_retriever()
     vec = model.encode([query], normalize_embeddings=True).astype("float32")
     _, indices = index.search(vec, k)
 
     film_ids = [int(id_map[i]) for i in indices[0] if i < len(id_map)]
     try:
-        films = _fetch_films_from_db(film_ids)
+        films = data_api_client.get_films_by_ids(film_ids)
     except RuntimeError as e:
         return f"[ERREUR BASE DE DONNÉES] {e} — informe l'utilisateur que la base est temporairement inaccessible."
 
@@ -157,14 +112,13 @@ def search_horror_movies(query: str, k: int = 5) -> str:
 
     parts = []
     for f in films:
-        year = (str(f.get("release_date") or ""))[:4]
-        genres = f.get("genres") or []
-        if isinstance(genres, list):
-            genres = ", ".join(genres)
+        year = f["release_date"][:4] if f.get("release_date") else ""
+        genres = ", ".join(f["genres"]) if f["genres"] else ""
+        tmdb_score = (f.get("evaluations") or {}).get("tmdb")
         parts.append(
             f"Titre : {f['title']} ({year})\n"
             f"Genres : {genres}\n"
-            f"Note TMDB : {f.get('vote_average') or 'N/A'}\n"
+            f"Note TMDB : {tmdb_score or 'N/A'}\n"
             f"Synopsis : {f.get('overview') or ''}"
         )
 

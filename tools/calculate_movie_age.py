@@ -1,19 +1,18 @@
 """
 Tool 4 : calculate_movie_age
 Calcule l'âge exact d'un film à partir de sa date de sortie en base.
-Fonction Python pure — aucun appel LLM ni réseau.
+Récupère les données via la Couche Données (tools/data_api_client.py) —
+aucun appel LLM, aucun SQL direct.
 """
 import logging
-import os
 from datetime import date
+
+from tools import data_api_client
 
 _MOIS_FR = [
     "", "janvier", "février", "mars", "avril", "mai", "juin",
     "juillet", "août", "septembre", "octobre", "novembre", "décembre"
 ]
-
-import psycopg2
-from psycopg2.extras import RealDictCursor
 
 logger = logging.getLogger(__name__)
 
@@ -40,53 +39,29 @@ TOOL_DEFINITION = {
 }
 
 
-def _get_conn():
-    db_url = os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise ValueError("SUPABASE_DB_URL ou DATABASE_URL non configurée.")
-    return psycopg2.connect(db_url)
-
-
 def calculate_movie_age(movie_name: str) -> str:
     """
-    Cherche le film en base, récupère sa date de sortie et calcule son âge.
+    Cherche le film via la Couche Données, récupère sa date de sortie et
+    calcule son âge.
     """
     try:
-        conn = _get_conn()
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT title, original_title, release_date
-                FROM film
-                WHERE title ILIKE %s OR original_title ILIKE %s
-                ORDER BY
-                    CASE WHEN LOWER(title)          = LOWER(%s) THEN 0
-                         WHEN LOWER(original_title) = LOWER(%s) THEN 1
-                         ELSE 2
-                    END,
-                    popularity DESC NULLS LAST
-                LIMIT 1
-                """,
-                (f"%{movie_name}%", f"%{movie_name}%", movie_name, movie_name)
-            )
-            row = cur.fetchone()
-        conn.close()
+        film = data_api_client.search_film(movie_name)
 
-        if not row:
+        if not film:
             return f"Film « {movie_name} » introuvable dans la base de données."
 
-        if not row["release_date"]:
-            return f"La date de sortie de « {row['title']} » n'est pas renseignée en base."
+        if not film.get("release_date"):
+            return f"La date de sortie de « {film['title']} » n'est pas renseignée en base."
 
-        release = row["release_date"]
+        release = date.fromisoformat(film["release_date"])
         today   = date.today()
         age     = today.year - release.year - (
             (today.month, today.day) < (release.month, release.day)
         )
 
-        title_display = row["title"]
-        if row["original_title"] and row["original_title"] != row["title"]:
-            title_display += f" ({row['original_title']})"
+        title_display = film["title"]
+        if film.get("original_title") and film["original_title"] != film["title"]:
+            title_display += f" ({film['original_title']})"
 
         date_fr = f"{release.day} {_MOIS_FR[release.month]} {release.year}"
 
