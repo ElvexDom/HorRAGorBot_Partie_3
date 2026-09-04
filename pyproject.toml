@@ -24,6 +24,9 @@ dependencies = [
     "langfuse>=4.13.2",
     "beautifulsoup4>=4.14.3",
     "sqlalchemy>=2.0.50",
+    "pyjwt>=2.13.0",
+    "bcrypt>=5.0.0",
+    "torch>=2.0.0",
 ]
 
 [dependency-groups]
@@ -33,13 +36,36 @@ dev = [
     "pytest-cov>=7.1.0",
 ]
 
+# torch (dépendance transitive de sentence-transformers, pour les embeddings
+# FAISS) tire par défaut, sur Linux, toute une série de paquets nvidia-*
+# (CUDA) même sans GPU -- plusieurs Go pour rien dans des conteneurs CPU-only.
+# On force la variante CPU-only officielle de PyTorch, qui ne déclare aucune
+# dépendance CUDA. Cf. https://docs.astral.sh/uv/guides/integration/pytorch/
+#
+# Environnements restreints à Windows (dev local) + Linux (Docker) : le lock
+# universel par défaut inclut macOS, pour lequel l'index pytorch-cpu ne
+# publie pas systématiquement de wheel, ce qui empêchait la résolution.
+[tool.uv]
+environments = [
+    "sys_platform == 'linux'",
+    "sys_platform == 'win32'",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["tests/manual", ".venv"]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["graph", "tools", "data_api", "main_api"]
+source = ["graph", "tools", "data_api", "main_api", "auth"]
 
 [tool.coverage.report]
 fail_under = 80
