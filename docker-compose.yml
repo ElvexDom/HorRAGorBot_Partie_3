@@ -66,6 +66,62 @@ services:
         condition: service_healthy
 
   # -----------------------------------------------------------------------
+  # Monitoring 360° - Prometheus (metriques), Grafana (dashboards),
+  # Uptime Kuma (disponibilite). Rejoignent backend-net ET public-net : ce
+  # sont des outils d'observabilite interne, pas des routes metier - leur
+  # presence ne republie aucun port de data-api (toujours aucun port
+  # publie), l'isolation "inaccessible depuis l'exterieur" reste intacte.
+  # -----------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: horragor-prometheus
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - backend-net
+      - public-net
+    depends_on:
+      data-api:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: horragor-grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    networks:
+      - public-net
+    depends_on:
+      - prometheus
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: horragor-uptime-kuma
+    volumes:
+      - uptime_kuma_data:/app/data
+    ports:
+      - "3002:3001"
+    networks:
+      - backend-net
+      - public-net
+    depends_on:
+      data-api:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  # -----------------------------------------------------------------------
   # Service PySpark - analyses textuelles du Gold Layer
   # -----------------------------------------------------------------------
   spark:
@@ -91,3 +147,8 @@ networks:
   # publiés (8000, 8501) sont ce qui les rend joignables depuis l'hôte.
   public-net:
     driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  uptime_kuma_data:

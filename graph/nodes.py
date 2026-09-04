@@ -11,6 +11,7 @@ from groq import BadRequestError
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from graph.llm import get_groq_llm
+from graph.metrics import NODE_DURATION_SECONDS, record_token_usage, record_tool_call
 from graph.state import AgentState
 from tools.rag_tool import INSUFFICIENT_MARKERS, RAG_TOOL_DISPATCH, RAG_TOOLS
 from tools.scraper_tool import SCRAPER_TOOL_DISPATCH, SCRAPER_TOOLS
@@ -38,52 +39,55 @@ _RAG_SYSTEM_PROMPT = (
 
 
 def rag_node(state: AgentState) -> dict:
-    question = state["user_question"]
-    llm = get_groq_llm(temperature=0.2).bind_tools(RAG_TOOLS)
+    with NODE_DURATION_SECONDS.labels(node="rag").time():
+        question = state["user_question"]
+        llm = get_groq_llm(temperature=0.2).bind_tools(RAG_TOOLS)
 
-    messages: list = [
-        SystemMessage(content=_RAG_SYSTEM_PROMPT),
-        HumanMessage(content=question),
-    ]
+        messages: list = [
+            SystemMessage(content=_RAG_SYSTEM_PROMPT),
+            HumanMessage(content=question),
+        ]
 
-    tools_used: list[str] = []
-    collected: list[str] = []
-    ai_msg: AIMessage = None
+        tools_used: list[str] = []
+        collected: list[str] = []
+        ai_msg: AIMessage = None
 
-    for _ in range(_MAX_TOOL_ROUNDS):
-        try:
-            ai_msg = llm.invoke(messages)
-        except BadRequestError as e:
-            # Groq valide strictement les arguments générés par le modèle
-            # (ex: un "k" sérialisé en string). Plutôt que de planter le
-            # nœud, on s'arrête là avec ce qui a déjà été collecté.
-            logger.warning(f"[RAG] Appel LLM rejeté par Groq, arrêt de la collecte : {e}")
-            break
-        messages.append(ai_msg)
+        for _ in range(_MAX_TOOL_ROUNDS):
+            try:
+                ai_msg = llm.invoke(messages)
+            except BadRequestError as e:
+                # Groq valide strictement les arguments générés par le modèle
+                # (ex: un "k" sérialisé en string). Plutôt que de planter le
+                # nœud, on s'arrête là avec ce qui a déjà été collecté.
+                logger.warning(f"[RAG] Appel LLM rejeté par Groq, arrêt de la collecte : {e}")
+                break
+            messages.append(ai_msg)
+            record_token_usage("rag", getattr(ai_msg, "usage_metadata", None))
 
-        if not ai_msg.tool_calls:
-            break
+            if not ai_msg.tool_calls:
+                break
 
-        for tool_call in ai_msg.tool_calls:
-            name = tool_call["name"]
-            args = tool_call["args"]
-            fn = RAG_TOOL_DISPATCH.get(name)
-            result = fn(args) if fn else f"Outil inconnu : {name}"
-            logger.info(f"[RAG] Outil appelé : {name}({args})")
-            tools_used.append(name)
-            collected.append(result)
-            messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+            for tool_call in ai_msg.tool_calls:
+                name = tool_call["name"]
+                args = tool_call["args"]
+                fn = RAG_TOOL_DISPATCH.get(name)
+                result = fn(args) if fn else f"Outil inconnu : {name}"
+                logger.info(f"[RAG] Outil appelé : {name}({args})")
+                tools_used.append(name)
+                collected.append(result)
+                record_tool_call(name, "rag")
+                messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
 
-    rag_context = "\n\n".join(collected) if collected else (ai_msg.content if ai_msg else "")
-    rag_sufficient = _is_sufficient(rag_context)
+        rag_context = "\n\n".join(collected) if collected else (ai_msg.content if ai_msg else "")
+        rag_sufficient = _is_sufficient(rag_context)
 
-    logger.info(f"[RAG] sufficient={rag_sufficient} tools_used={tools_used}")
+        logger.info(f"[RAG] sufficient={rag_sufficient} tools_used={tools_used}")
 
-    return {
-        "rag_context": rag_context,
-        "rag_sufficient": rag_sufficient,
-        "tools_used": tools_used,
-    }
+        return {
+            "rag_context": rag_context,
+            "rag_sufficient": rag_sufficient,
+            "tools_used": tools_used,
+        }
 
 
 def _is_sufficient(context: str) -> bool:
@@ -108,39 +112,43 @@ _SCRAPER_SYSTEM_PROMPT = (
 
 
 def scraper_node(state: AgentState) -> dict:
-    question = state["user_question"]
-    llm = get_groq_llm(temperature=0.0).bind_tools(
-        SCRAPER_TOOLS, tool_choice="detailed_synopsis"
-    )
+    with NODE_DURATION_SECONDS.labels(node="scraper").time():
+        question = state["user_question"]
+        llm = get_groq_llm(temperature=0.0).bind_tools(
+            SCRAPER_TOOLS, tool_choice="detailed_synopsis"
+        )
 
-    messages = [
-        SystemMessage(content=_SCRAPER_SYSTEM_PROMPT),
-        HumanMessage(content=question),
-    ]
+        messages = [
+            SystemMessage(content=_SCRAPER_SYSTEM_PROMPT),
+            HumanMessage(content=question),
+        ]
 
-    tools_used: list[str] = []
-    scraper_context = ""
+        tools_used: list[str] = []
+        scraper_context = ""
 
-    try:
-        ai_msg = llm.invoke(messages)
-    except BadRequestError as e:
-        logger.warning(f"[Scraper] Appel LLM rejeté par Groq : {e}")
-        return {"scraper_context": scraper_context, "tools_used": tools_used}
+        try:
+            ai_msg = llm.invoke(messages)
+        except BadRequestError as e:
+            logger.warning(f"[Scraper] Appel LLM rejeté par Groq : {e}")
+            return {"scraper_context": scraper_context, "tools_used": tools_used}
 
-    if ai_msg.tool_calls:
-        tool_call = ai_msg.tool_calls[0]
-        name = tool_call["name"]
-        args = tool_call["args"]
-        fn = SCRAPER_TOOL_DISPATCH.get(name)
-        if fn:
-            scraper_context = fn(args)
-            tools_used.append(name)
-            logger.info(f"[Scraper] Outil appelé : {name}({args})")
+        record_token_usage("scraper", getattr(ai_msg, "usage_metadata", None))
 
-    return {
-        "scraper_context": scraper_context,
-        "tools_used": tools_used,
-    }
+        if ai_msg.tool_calls:
+            tool_call = ai_msg.tool_calls[0]
+            name = tool_call["name"]
+            args = tool_call["args"]
+            fn = SCRAPER_TOOL_DISPATCH.get(name)
+            if fn:
+                scraper_context = fn(args)
+                tools_used.append(name)
+                record_tool_call(name, "scraper")
+                logger.info(f"[Scraper] Outil appelé : {name}({args})")
+
+        return {
+            "scraper_context": scraper_context,
+            "tools_used": tools_used,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -161,37 +169,39 @@ _NARRATION_SYSTEM_PROMPT = (
 
 
 def narration_node(state: AgentState) -> dict:
-    question = state["user_question"]
+    with NODE_DURATION_SECONDS.labels(node="narration").time():
+        question = state["user_question"]
 
-    synthesis_parts = [state.get("rag_context", "")]
-    if state.get("scraper_context"):
-        synthesis_parts.append(state["scraper_context"])
-    synthesis = "\n\n".join(part for part in synthesis_parts if part)
+        synthesis_parts = [state.get("rag_context", "")]
+        if state.get("scraper_context"):
+            synthesis_parts.append(state["scraper_context"])
+        synthesis = "\n\n".join(part for part in synthesis_parts if part)
 
-    if not synthesis.strip():
-        synthesis = (
-            "Aucune donnée n'a pu être récoltée localement ni sur le web. "
-            "Réponds avec ta connaissance générale de l'univers de l'horreur, "
-            "dans le même ton gothique, en restant honnête sur l'incertitude."
-        )
-
-    llm = get_groq_llm(temperature=0.85)
-    messages = [
-        SystemMessage(content=_NARRATION_SYSTEM_PROMPT),
-        HumanMessage(
-            content=(
-                f"Question originale de l'utilisateur : {question}\n\n"
-                f"Synthèse de données à romancer :\n{synthesis}"
+        if not synthesis.strip():
+            synthesis = (
+                "Aucune donnée n'a pu être récoltée localement ni sur le web. "
+                "Réponds avec ta connaissance générale de l'univers de l'horreur, "
+                "dans le même ton gothique, en restant honnête sur l'incertitude."
             )
-        ),
-    ]
 
-    ai_msg = llm.invoke(messages)
-    answer = ai_msg.content
+        llm = get_groq_llm(temperature=0.85)
+        messages = [
+            SystemMessage(content=_NARRATION_SYSTEM_PROMPT),
+            HumanMessage(
+                content=(
+                    f"Question originale de l'utilisateur : {question}\n\n"
+                    f"Synthèse de données à romancer :\n{synthesis}"
+                )
+            ),
+        ]
 
-    logger.info(f"[Narration] Réponse générée ({len(answer)} caractères)")
+        ai_msg = llm.invoke(messages)
+        answer = ai_msg.content
+        record_token_usage("narration", getattr(ai_msg, "usage_metadata", None))
 
-    return {
-        "messages": [AIMessage(content=answer)],
-        "tools_used": ["narration-llm"],
-    }
+        logger.info(f"[Narration] Réponse générée ({len(answer)} caractères)")
+
+        return {
+            "messages": [AIMessage(content=answer)],
+            "tools_used": ["narration-llm"],
+        }

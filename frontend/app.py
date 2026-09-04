@@ -1,9 +1,16 @@
 import os
 import re
+import time
 
 import streamlit as st
 import streamlit.components.v1 as components
 import httpx
+
+from metrics import (
+    CHAT_REQUEST_DURATION_SECONDS,
+    CHAT_REQUESTS_TOTAL,
+    LOGIN_ATTEMPTS_TOTAL,
+)
 
 # En local, l'API Intelligence tourne sur localhost. En Docker, ce nom ne
 # résout pas le conteneur "api" — docker-compose surcharge API_BASE_URL.
@@ -18,6 +25,7 @@ def _authenticated_post(path: str, json_body: dict, timeout: float = 60.0) -> ht
         headers = {"Authorization": f"Bearer {st.session_state.access_token}"}
         return httpx.post(f"{API_BASE_URL}{path}", json=json_body, headers=headers, timeout=timeout)
 
+    start = time.monotonic()
     response = _post()
     if response.status_code == 401:
         try:
@@ -34,8 +42,11 @@ def _authenticated_post(path: str, json_body: dict, timeout: float = 60.0) -> ht
         except httpx.HTTPError:
             for key in ("access_token", "refresh_token"):
                 st.session_state.pop(key, None)
+            CHAT_REQUESTS_TOTAL.labels(status="error").inc()
             st.rerun()
 
+    CHAT_REQUEST_DURATION_SECONDS.observe(time.monotonic() - start)
+    CHAT_REQUESTS_TOTAL.labels(status="success" if response.status_code < 400 else "error").inc()
     return response
 
 
@@ -61,10 +72,13 @@ def _login_screen() -> None:
             tokens = resp.json()
             st.session_state.access_token = tokens["access_token"]
             st.session_state.refresh_token = tokens["refresh_token"]
+            LOGIN_ATTEMPTS_TOTAL.labels(success="true").inc()
             st.rerun()
         except httpx.HTTPStatusError:
+            LOGIN_ATTEMPTS_TOTAL.labels(success="false").inc()
             st.error("Identifiants invalides.")
         except httpx.HTTPError:
+            LOGIN_ATTEMPTS_TOTAL.labels(success="false").inc()
             st.error("Impossible de joindre l'API. Vérifie qu'elle est bien lancée.")
 
     st.stop()

@@ -14,6 +14,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, ConfigDict, Field
 
 import auth
@@ -70,6 +71,10 @@ app = FastAPI(
     version="3.0.0",
     lifespan=lifespan
 )
+
+# Expose GET /metrics (Prometheus) : latence/statut par route, requêtes en
+# cours — plus les métriques métier de graph/metrics.py (même process/registry).
+Instrumentator().instrument(app).expose(app)
 
 # ============================================================================
 # MODÈLES PYDANTIC

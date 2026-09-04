@@ -19,4 +19,7 @@ COPY frontend/ ./frontend/
 ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8501
+# Metriques Prometheus (frontend/metrics.py) -- pas de port publie cote hote,
+# scrappe en interne uniquement (comme data-api).
+EXPOSE 8502
 CMD ["streamlit", "run", "frontend/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]

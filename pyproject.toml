@@ -27,6 +27,8 @@ dependencies = [
     "pyjwt>=2.13.0",
     "bcrypt>=5.0.0",
     "torch>=2.0.0",
+    "prometheus-fastapi-instrumentator>=8.1.0",
+    "prometheus-client>=0.26.0",
 ]
 
 [dependency-groups]

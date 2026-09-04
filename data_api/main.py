@@ -8,6 +8,7 @@ appelle ce service via tools/data_api_client.py.
 import logging
 
 from fastapi import Depends, FastAPI, HTTPException, Query
+from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy.orm import Session
 
 from data_api.db import find_film_by_title, get_films_by_ids, get_session, to_film_detail
@@ -21,6 +22,9 @@ app = FastAPI(
     description="Couche Données — encapsule l'accès à la base de films (HorRAGor 1)",
     version="1.0.0",
 )
+
+# GET /metrics (Prometheus) : latence/statut par route, requêtes en cours.
+Instrumentator().instrument(app).expose(app)
 
 
 @app.get("/health", tags=["Health"])
