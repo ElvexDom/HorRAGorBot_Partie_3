@@ -12,10 +12,11 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+import auth
 from graph.judge import judge_and_retry
 from graph.pipeline import app as agent_graph
 from tools.rag_tool import initialize_retriever
@@ -110,6 +111,27 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Historique de la conversation (messages {role, content})"
     )
+
+
+class LoginRequest(BaseModel):
+    """Identifiants du compte de service (IHM)."""
+
+    username: str
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    """Refresh token à faire tourner ou révoquer."""
+
+    refresh_token: str
+
+
+class TokenResponse(BaseModel):
+    """Couple access/refresh token renvoyé par /auth/login et /auth/refresh."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
 
 
 class ToolResult(BaseModel):
@@ -217,12 +239,72 @@ async def health_check():
 
 
 @app.post(
+    "/auth/login",
+    response_model=TokenResponse,
+    tags=["Auth"],
+    summary="Connexion (compte de service IHM)"
+)
+async def login(request: LoginRequest) -> TokenResponse:
+    """
+    Vérifie les identifiants contre APP_USERNAME/APP_PASSWORD_HASH et émet
+    un couple access/refresh token.
+    """
+
+    expected_username = os.getenv("APP_USERNAME")
+    expected_hash = os.getenv("APP_PASSWORD_HASH")
+
+    if not expected_username or not expected_hash:
+        raise HTTPException(status_code=500, detail="APP_USERNAME/APP_PASSWORD_HASH non configurés.")
+
+    if request.username != expected_username or not auth.verify_password(request.password, expected_hash):
+        raise HTTPException(status_code=401, detail="Identifiants invalides.")
+
+    return TokenResponse(
+        access_token=auth.create_access_token(request.username),
+        refresh_token=auth.create_refresh_token(request.username),
+    )
+
+
+@app.post(
+    "/auth/refresh",
+    response_model=TokenResponse,
+    tags=["Auth"],
+    summary="Renouvellement du couple de tokens"
+)
+async def refresh(request: RefreshRequest) -> TokenResponse:
+    """
+    Fait tourner un refresh token valide : l'ancien est invalidé, un nouveau
+    couple access/refresh est émis. 401 si le token est expiré, invalide,
+    ou déjà utilisé.
+    """
+
+    access_token, refresh_token = auth.rotate_refresh_token(request.refresh_token)
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@app.post(
+    "/auth/logout",
+    tags=["Auth"],
+    summary="Révocation du refresh token"
+)
+async def logout(request: RefreshRequest) -> dict:
+    """Révoque le refresh token fourni (déconnexion)."""
+
+    auth.revoke_refresh_token(request.refresh_token)
+    return {"status": "ok"}
+
+
+@app.post(
     "/chat",
     response_model=ChatResponse,
     responses={
         400: {
             "model": ErrorResponse,
             "description": "Requête invalide"
+        },
+        401: {
+            "model": ErrorResponse,
+            "description": "Non authentifié"
         },
         500: {
             "model": ErrorResponse,
@@ -232,7 +314,7 @@ async def health_check():
     tags=["Chat"],
     summary="Génération de réponse"
 )
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(request: ChatRequest, current_user: str = Depends(auth.get_current_user)) -> ChatResponse:
     """
     Reçoit une question et la fait traverser le graphe multi-agent
     (Agent RAG -> Router -> Agent Scraper -> Agent de Narration).

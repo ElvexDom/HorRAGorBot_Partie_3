@@ -6,8 +6,68 @@ import streamlit.components.v1 as components
 import httpx
 
 # En local, l'API Intelligence tourne sur localhost. En Docker, ce nom ne
-# résout pas le conteneur "api" — docker-compose surcharge API_URL.
-API_URL = os.environ.get("API_URL", "http://localhost:8000/chat")
+# résout pas le conteneur "api" — docker-compose surcharge API_BASE_URL.
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000")
+
+
+def _authenticated_post(path: str, json_body: dict, timeout: float = 60.0) -> httpx.Response:
+    """POST vers l'API Intelligence avec le token d'accès courant. Sur 401
+    (access token expiré), tente un refresh puis rejoue une fois l'appel ;
+    si le refresh échoue aussi, force une reconnexion."""
+    def _post():
+        headers = {"Authorization": f"Bearer {st.session_state.access_token}"}
+        return httpx.post(f"{API_BASE_URL}{path}", json=json_body, headers=headers, timeout=timeout)
+
+    response = _post()
+    if response.status_code == 401:
+        try:
+            refresh_resp = httpx.post(
+                f"{API_BASE_URL}/auth/refresh",
+                json={"refresh_token": st.session_state.refresh_token},
+                timeout=10.0,
+            )
+            refresh_resp.raise_for_status()
+            tokens = refresh_resp.json()
+            st.session_state.access_token = tokens["access_token"]
+            st.session_state.refresh_token = tokens["refresh_token"]
+            response = _post()
+        except httpx.HTTPError:
+            for key in ("access_token", "refresh_token"):
+                st.session_state.pop(key, None)
+            st.rerun()
+
+    return response
+
+
+def _login_screen() -> None:
+    """Formulaire de connexion — bloque le reste de l'app tant que l'IHM
+    n'a pas obtenu de token auprès de l'API Intelligence (/auth/login)."""
+    st.title("🩸 HorRAGor BOT")
+    st.caption("Connexion requise pour accéder au guide de l'horreur.")
+
+    with st.form("login_form"):
+        username = st.text_input("Identifiant")
+        password = st.text_input("Mot de passe", type="password")
+        submitted = st.form_submit_button("Se connecter")
+
+    if submitted:
+        try:
+            resp = httpx.post(
+                f"{API_BASE_URL}/auth/login",
+                json={"username": username, "password": password},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            tokens = resp.json()
+            st.session_state.access_token = tokens["access_token"]
+            st.session_state.refresh_token = tokens["refresh_token"]
+            st.rerun()
+        except httpx.HTTPStatusError:
+            st.error("Identifiants invalides.")
+        except httpx.HTTPError:
+            st.error("Impossible de joindre l'API. Vérifie qu'elle est bien lancée.")
+
+    st.stop()
 
 
 def _sanitize_markdown(text: str) -> str:
@@ -793,6 +853,9 @@ st.set_page_config(
 
 _inject_background()
 
+if "access_token" not in st.session_state:
+    _login_screen()
+
 st.title("🩸 HorRAGor BOT")
 st.caption("Ton guide dans l'univers de l'horreur — cinéma, littérature, jeux vidéo.")
 
@@ -820,10 +883,9 @@ if prompt := st.chat_input("Murmure ton sort dans l'obscurité..."):
                     {"role": m["role"], "content": m["content"]}
                     for m in st.session_state.messages[:-1]
                 ][-8:]
-                response = httpx.post(
-                    API_URL,
-                    json={"question": prompt, "history": history},
-                    timeout=60.0,
+                response = _authenticated_post(
+                    "/chat",
+                    {"question": prompt, "history": history},
                 )
                 response.raise_for_status()
                 data   = response.json()

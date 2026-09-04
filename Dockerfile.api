@@ -16,7 +16,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 
 COPY graph/ ./graph/
 COPY tools/ ./tools/
-COPY main_api.py ./
+COPY main_api.py auth.py ./
 # Index FAISS pré-construit, chargé par tools/rag_tool.py au démarrage.
 COPY data/faiss.index data/id_map.npy ./data/
 
