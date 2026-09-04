@@ -22,4 +22,7 @@ EXPOSE 8501
 # Metriques Prometheus (frontend/metrics.py) -- pas de port publie cote hote,
 # scrappe en interne uniquement (comme data-api).
 EXPOSE 8502
-CMD ["streamlit", "run", "frontend/app.py", "--server.address", "0.0.0.0", "--server.port", "8501"]
+# bootstrap.py demarre le serveur de metriques AVANT Streamlit (qui n'execute
+# app.py que paresseusement, a la premiere connexion navigateur).
+WORKDIR /app/frontend
+CMD ["python", "bootstrap.py"]

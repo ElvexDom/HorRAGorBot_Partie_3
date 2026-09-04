@@ -1,12 +1,14 @@
 """
 Métriques Prometheus de la Couche Présentation (Streamlit).
 
-Streamlit n'expose pas de route /metrics stable/documentée entre versions —
-plutôt que de dépendre d'un comportement interne non garanti, ce module
-démarre son propre petit serveur HTTP Prometheus (port 8502) au niveau
-module. Le cache d'import Python garantit qu'il ne démarre qu'une seule
-fois par processus, malgré le fait que Streamlit ré-exécute app.py à
-chaque interaction utilisateur (ce module, lui, n'est importé qu'une fois).
+Streamlit n'exécute app.py que paresseusement — au premier navigateur qui se
+connecte (session WebSocket), jamais au démarrage du conteneur. Démarrer le
+serveur /metrics depuis app.py le rendrait donc invisible de Prometheus tant
+qu'aucun utilisateur n'a ouvert la page. C'est pour ça que start_metrics_server()
+est appelée explicitement depuis frontend/bootstrap.py (le point d'entrée du
+conteneur), avant même de lancer Streamlit — dans le même process, pour que
+les Counter/Histogram définis ici restent partagés avec ceux incrémentés
+depuis app.py (le registre prometheus_client est global au process).
 """
 import logging
 
@@ -31,14 +33,9 @@ LOGIN_ATTEMPTS_TOTAL = Counter(
     ["success"],
 )
 
-print("[metrics] module import démarré, appel de start_http_server(8502)...", flush=True)
-try:
-    start_http_server(8502, addr="0.0.0.0")
-    print("[metrics] start_http_server(8502) OK", flush=True)
-except OSError:
-    # Déjà démarré dans ce process (ne devrait pas arriver vu le cache
-    # d'import, mais reste inoffensif si un rechargement forcé le déclenche).
-    logger.warning("Serveur de métriques déjà démarré sur le port 8502.")
-except Exception as e:  # noqa: BLE001 — debug temporaire
-    print(f"[metrics] ECHEC start_http_server : {type(e).__name__}: {e}", flush=True)
-    raise
+
+def start_metrics_server(port: int = 8502) -> None:
+    try:
+        start_http_server(port, addr="0.0.0.0")
+    except OSError:
+        logger.warning(f"Serveur de métriques déjà démarré sur le port {port}.")
