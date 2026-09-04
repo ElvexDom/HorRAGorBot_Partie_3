@@ -6,7 +6,10 @@ import os
 
 from langchain_groq import ChatGroq
 
-DEFAULT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# llama-3.3-70b-versatile a ete retire du catalogue Groq (verifie via
+# GET /openai/v1/models) -- openai/gpt-oss-120b le remplace : tool-calling
+# supporte, disponible sur le compte utilise pour ce projet.
+DEFAULT_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 
 def get_groq_llm(temperature: float = 0.7) -> ChatGroq:

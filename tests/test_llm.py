@@ -3,7 +3,7 @@ Tests unitaires de graph/llm.py — le client Groq partagé par les nœuds.
 """
 import pytest
 
-from graph.llm import get_groq_llm
+from graph.llm import DEFAULT_MODEL, get_groq_llm
 
 
 def test_raises_without_api_key(monkeypatch):
@@ -19,4 +19,4 @@ def test_returns_chat_groq_client_when_key_configured(monkeypatch):
     llm = get_groq_llm(temperature=0.3)
 
     assert llm.temperature == 0.3
-    assert llm.model_name == "llama-3.3-70b-versatile"
+    assert llm.model_name == DEFAULT_MODEL

@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 import auth
+from graph import llm as graph_llm
 from graph.judge import judge_and_retry
 from graph.pipeline import app as agent_graph
 from tools.rag_tool import initialize_retriever
@@ -411,7 +412,7 @@ async def get_info():
         "architecture": "multi-agent (LangGraph) : rag -> router -> [scraper] -> narration",
         "llm": {
             "provider": "Groq",
-            "model": "llama-3.3-70b-versatile",
+            "model": graph_llm.DEFAULT_MODEL,
             "status": groq_status
         },
         "monitoring": {
