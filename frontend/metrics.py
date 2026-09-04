@@ -31,9 +31,14 @@ LOGIN_ATTEMPTS_TOTAL = Counter(
     ["success"],
 )
 
+print("[metrics] module import démarré, appel de start_http_server(8502)...", flush=True)
 try:
-    start_http_server(8502)
+    start_http_server(8502, addr="0.0.0.0")
+    print("[metrics] start_http_server(8502) OK", flush=True)
 except OSError:
     # Déjà démarré dans ce process (ne devrait pas arriver vu le cache
     # d'import, mais reste inoffensif si un rechargement forcé le déclenche).
     logger.warning("Serveur de métriques déjà démarré sur le port 8502.")
+except Exception as e:  # noqa: BLE001 — debug temporaire
+    print(f"[metrics] ECHEC start_http_server : {type(e).__name__}: {e}", flush=True)
+    raise
