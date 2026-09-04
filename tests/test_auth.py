@@ -32,6 +32,20 @@ class TestPasswordHashing:
         assert auth.verify_password("s3cret", "not-a-bcrypt-hash") is False
 
 
+class TestGetEnvPasswordHash:
+    def test_unescapes_doubled_dollar_signs(self, monkeypatch):
+        """`docker compose` interpole les env_file et exige $$ pour un $
+        littéral -- get_env_password_hash() doit rendre le hash original."""
+        monkeypatch.setenv("APP_PASSWORD_HASH", "$$2b$$12$$w6y2TZzVtdf1SLzH15rHt.Cu.fl8SxPNSLABkOiIwevRdzoB7hT4W")
+
+        assert auth.get_env_password_hash() == "$2b$12$w6y2TZzVtdf1SLzH15rHt.Cu.fl8SxPNSLABkOiIwevRdzoB7hT4W"
+
+    def test_returns_none_when_unset(self, monkeypatch):
+        monkeypatch.delenv("APP_PASSWORD_HASH", raising=False)
+
+        assert auth.get_env_password_hash() is None
+
+
 class TestTokenCreationAndDecoding:
     def test_access_token_round_trips(self):
         token = auth.create_access_token("admin")

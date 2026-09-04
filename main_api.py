@@ -251,7 +251,7 @@ async def login(request: LoginRequest) -> TokenResponse:
     """
 
     expected_username = os.getenv("APP_USERNAME")
-    expected_hash = os.getenv("APP_PASSWORD_HASH")
+    expected_hash = auth.get_env_password_hash()
 
     if not expected_username or not expected_hash:
         raise HTTPException(status_code=500, detail="APP_USERNAME/APP_PASSWORD_HASH non configurés.")

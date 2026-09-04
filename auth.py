@@ -37,6 +37,19 @@ _valid_refresh_jtis: dict[str, set[str]] = {}
 _bearer_scheme = HTTPBearer(auto_error=True)
 
 
+def get_env_password_hash() -> str | None:
+    """Lit APP_PASSWORD_HASH depuis l'environnement.
+
+    `docker compose` (contrairement à `docker run --env-file`) interpole les
+    `$VAR`/`${VAR}` trouvés dans les fichiers chargés via `env_file:` — un
+    hash bcrypt (format `$2b$12$...`) doit donc y être écrit avec chaque `$`
+    doublé (`$$`) pour survivre au passage en conteneur. En local (uvicorn,
+    pytest), `python-dotenv` ne fait aucune interpolation : `$$` resterait
+    tel quel sans ce dé-échappement, donc on l'applique dans tous les cas."""
+    value = os.environ.get("APP_PASSWORD_HASH")
+    return value.replace("$$", "$") if value else value
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
